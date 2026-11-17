@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import tarfile
@@ -73,6 +74,13 @@ def _open(tarball: bytes) -> tarfile.TarFile:
     limit = MAX_ARCHIVE_BYTES + MAX_ARCHIVE_BYTES // 10 + (1 << 20)
     capped = _CappedReader(gzip.GzipFile(fileobj=io.BytesIO(tarball)), limit)
     return tarfile.open(fileobj=capped, mode="r|")
+
+
+def _short_id(value: str | None) -> str:
+    """A commit id taken from the archive, safe to show (the archive is untrusted text)."""
+    if value is None:
+        return "missing"
+    return value[:12] if re.fullmatch(r"[0-9a-f]{7,40}", value) else "not a commit id"
 
 
 def _check_name(name: str) -> None:
@@ -223,8 +231,18 @@ def install_from_tarball(
         with _open(tarball) as tf:
             top, members = _scan(tf)
             commit_in_archive = tf.pax_headers.get("comment")
-        if commit_in_archive != expected_commit or not top.endswith(expected_commit[:7]):
-            raise InstallerError("The archive does not belong to the signed commit")
+        # GitHub ends the top folder with the commit id, abbreviated to 7 characters or, for some
+        # repositories, in full: accept either, as long as it is the start of the signed commit.
+        folder_id = top.rsplit("-", 1)[-1]
+        folder_ok = bool(re.fullmatch(r"[0-9a-f]{7,40}", folder_id)) and expected_commit.startswith(
+            folder_id
+        )
+        if commit_in_archive != expected_commit or not folder_ok:
+            raise InstallerError(
+                "The archive does not belong to the signed commit "
+                f"(signed {expected_commit[:12]}, archive header {_short_id(commit_in_archive)}, "
+                f"archive folder ends with {_short_id(top.rsplit('-', 1)[-1])})"
+            )
         files = _plan(top, members, integration_name, is_reserved)
 
         dest_root.mkdir(parents=True, exist_ok=True)

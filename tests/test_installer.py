@@ -477,3 +477,31 @@ def test_remove_also_clears_recovery_markers(dirs):
     (dirs[1] / "demo_integration.swap").mkdir()
     assert remove_integration(dirs[0], dirs[1], "demo_integration") is True
     assert names(dirs[1]) == []
+
+
+def test_the_refusal_says_which_ids_disagree(dirs):
+    other = "9" * 40
+    with pytest.raises(InstallerError) as err:
+        install(make_tar(TOP, good_entries(), commit=other), dirs)
+    assert f"signed {COMMIT[:12]}" in str(err.value)
+    assert "archive header 999999999999" in str(err.value)
+    with pytest.raises(InstallerError, match="archive header missing"):
+        install(make_tar(TOP, good_entries(), commit=None), dirs)
+    with pytest.raises(InstallerError, match="archive header not a commit id"):
+        install(make_tar(TOP, good_entries(), commit="<script>"), dirs)
+
+
+@pytest.mark.parametrize("length", [7, 12, 40])
+def test_the_folder_may_end_with_the_commit_in_any_abbreviation_github_uses(dirs, length):
+    """GitHub names the top folder with 7 characters, or with the whole id for some repositories."""
+    res = install(make_tar(f"acme-demo-{COMMIT[:length]}", good_entries()), dirs)
+    assert res.integration == "demo_integration"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["abcdef", "abcdef9", "ABCDEF0", "not-a-sha", "9" * 40, COMMIT[:20] + "9" * 20],
+)
+def test_a_folder_that_is_not_the_start_of_the_signed_commit_is_refused(dirs, suffix):
+    with pytest.raises(InstallerError, match="signed commit"):
+        install(make_tar(f"acme-demo-{suffix}", good_entries()), dirs)

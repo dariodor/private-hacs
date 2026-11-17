@@ -141,7 +141,7 @@ python -m pytest        # needs pytest-homeassistant-custom-component, git and s
 ruff check .
 ```
 
-245 tests. They create real git repositories with real SSH-signed tags, so the verifier is
+255 tests. They create real git repositories with real SSH-signed tags, so the verifier is
 checked against what `git` and `ssh-keygen` produce; the tarballs come from `git archive` or
 carry a GitHub-style header. The GitHub client is tested against scripted responses only. The unit
 tests run on Home Assistant 2026.10.4 (the newest the test plugin supports).
