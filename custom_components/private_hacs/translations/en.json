@@ -33,7 +33,7 @@
         "data": {
           "full_name": "Repository (URL or owner/repo)",
           "github_token": "GitHub fine-grained token (read-only, not stored)",
-          "integration_name": "Integration folder name (custom_components/<name>, must equal the manifest domain)",
+          "integration_name": "Integration folder name (the folder inside custom_components, must equal the manifest domain)",
           "install_now": "Install the latest signed release now"
         }
       },
