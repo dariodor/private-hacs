@@ -1,13 +1,13 @@
 {
   "domain": "private_hacs",
   "name": "Private HACS",
-  "codeowners": ["@pestevez"],
+  "codeowners": ["@dariodor"],
   "config_flow": true,
-  "dependencies": ["http"],
-  "documentation": "https://github.com/pestevez/private-hacs",
+  "dependencies": [],
+  "documentation": "https://github.com/dariodor/private-hacs",
   "integration_type": "service",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/pestevez/private-hacs/issues",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/dariodor/private-hacs/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

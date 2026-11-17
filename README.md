@@ -1,123 +1,166 @@
-# Private HACS
+# Private HACS (signed)
 
-A small Home Assistant custom integration that installs and updates other custom
-integrations from **private GitHub repositories**.
+A small Home Assistant custom integration that installs and updates **your own custom
+integrations from private GitHub repositories**, and installs a release **only if its tag is
+signed by a key you trust**.
 
-It is conceptually similar to [HACS](https://hacs.xyz), but stripped to a single
-job: pull a custom integration out of a GitHub repo you own — public or private —
-and write it into your `custom_components/` folder. There is no central catalog;
-you add repos by their `owner/repo` name.
+Fork of [pestevez/private-hacs](https://github.com/pestevez/private-hacs) (MIT). The original
+tracks branches/releases/commits and trusts whatever GitHub returns; this fork replaces that with
+signed tags, strict archive handling, rollback, no services and no stored token. See
+*Differences* below.
 
-Useful when you maintain integrations that you do not want to publish (work
-projects, personal experiments, betas, internal tools) but still want to deploy
-to your Home Assistant instance the same way you would any other community
-integration.
+## What it checks
 
-## Features
+An install happens only if **all** of these hold:
 
-- Authenticated GitHub access via a Personal Access Token, so private repos work.
-- Track a repo by **latest release**, a specific **tag**, a **branch** (e.g.
-  `main`), or a pinned **commit SHA**.
-- **No background polling** — Private HACS never reaches out to GitHub on its
-  own. Updates happen when you click **Install / update**, on your schedule.
-  Designed for repos you control yourself, where you already know when there's
-  something new to pull.
-- Path-traversal-safe tarball extraction.
+1. The tag is an **annotated `vX.Y.Z` tag**, signed with an **SSH Ed25519 key** (what
+   `git tag -s` produces with `gpg.format=ssh`). The signature is verified **locally**, in
+   Python, against the public keys you typed into Home Assistant. GitHub's own "verified" flag
+   is never used, and keys are never read from a repository.
+2. The tag name, the commit and the object type are read from the **signed payload**, not from
+   what the GitHub API says next to it. A valid signed tag served under another tag name is refused.
+3. The archive carries, in its header, **exactly that signed commit id** (all 40 hex digits; GitHub's
+   tarballs are made by `git archive`, which records it there). The *bytes* of the archive still
+   come from GitHub over TLS (`api.github.com`, then `codeload.github.com`, nothing else is
+   followed, and the token is never sent to the second).
+4. Only `custom_components/<name>/` is extracted, where `<name>` is the folder you declared when
+   adding the repository (the manifest `domain` must equal it, its `version` must equal the tag).
+   The rest of the archive is ignored. Inside the folder, links, special files, hidden files,
+   duplicate names (also differing only by case), names other than ASCII letters, digits and
+   `_ . -`, files other than `.py .json .yaml .yml .txt .md .png` (lowercase) and anything over
+   the limits (500 files, 5 MB each, 20 MB total, 32 MB download, 128 MB decompressed) are refused.
+5. It is not a downgrade and not a changed tag: an older version, a **same version with a different
+   commit** (a moved tag), or a version that cannot be compared is refused, and so is
+   reinstalling exactly the same code, unless you tick *allow*. (That also keeps the rollback copy
+   from being overwritten by accident.)
+6. It will not take the name of a core Home Assistant integration, of Private HACS, or of another
+   tracked repository, and it will **not overwrite a folder that Private HACS did not install**.
 
-Themes, frontend cards, AppDaemon apps, and other HACS categories are out of
-scope. This is integrations only.
+The new version is written to a temporary folder, flushed to disk and put in place with two
+renames; the previous version is kept for **rollback**, which only restores it if the key that
+signed it is still trusted. A crash between the renames is repaired the next time the entry is
+set up, and the stored state is then aligned with what is on disk.
 
-## Installation
+Someone who can write to your repository, or who steals the GitHub token, but does **not** have
+your signing key **cannot get unsigned or differently signed code installed**.
 
-### Recommended: install via HACS
+## The GitHub token
 
-1. In Home Assistant, open **HACS → Integrations → ⋮ → Custom repositories**.
-2. Add `https://github.com/pestevez/private-hacs` as an **Integration**
-   category.
-3. Click **Install** on the new "Private HACS" entry, then **restart Home
-   Assistant**.
+**It is not stored anywhere.** (Upstream keeps it in `.storage/core.config_entries`, plain JSON;
+Home Assistant offers integrations no encrypted secret store.) You type a fine-grained read-only
+token in the dialog for each action that talks to GitHub; it lives in memory for that action, in
+a client that is created for it and dropped afterwards. Nothing persistent (config entry,
+`.storage`, backups) contains it, and it is not logged. A password manager makes pasting it easy.
 
-### Manual
+While you type it, it passes through your browser and Home Assistant's websocket like any
+password typed in the UI: a reverse proxy that logs request bodies, or debug logging of the
+websocket, could capture it. Use a short-lived token.
 
-If you don't have HACS, copy `custom_components/private_hacs/` into your
-Home Assistant `config/custom_components/` directory and restart.
+## Setup
 
-## First-time setup
+1. **Signing key** (once, on your machine; use a passphrase and `ssh-add` it, git needs 2.34+):
+   `ssh-keygen -t ed25519 -f ~/.ssh/ha_release_signing -C ha-release`
+2. **Sign each release** in each integration repository (the manifest `version` must equal the tag):
+   ```
+   git -c gpg.format=ssh -c user.signingkey=~/.ssh/ha_release_signing.pub tag -s v1.2.3 -m "my_integration 1.2.3"
+   git push origin v1.2.3
+   ```
+3. **GitHub token**: fine-grained personal access token, *Only select repositories*, permission
+   **Contents: Read-only**, with an expiry date.
+4. **Install this integration** (see below), restart, then *Settings → Devices & services → Add
+   integration → Private HACS* and paste your **public** signing key (`cat ~/.ssh/ha_release_signing.pub`).
+5. *Configure → Add a private repository*: `owner/repo`, the token and the **integration folder
+   name**, install, then **restart** Home Assistant (a reload is not enough: the swap replaces
+   files that may already be imported).
 
-1. **Settings → Devices & services → Add integration → "Private HACS"**.
-2. Paste a GitHub Personal Access Token. Either works:
-   - **Classic** PAT with the `repo` scope, or
-   - **Fine-grained** PAT scoped to the specific repos you want to install,
-     with **Repository permissions → Contents: Read-only**.
+Day to day: *Configure → Install / update / roll back / remove*. Without a tag it takes the
+newest tag that verifies (up to 25 are tried; bogus newer tags are skipped and listed in the
+notification); with a tag it installs exactly that one or fails. Roll back and remove need no token.
 
-   The token is stored in Home Assistant's encrypted config-entry store.
+There are **no services** and no background polling: nothing runs unless an administrator
+opens the dialog. (`manifest.json` says `iot_class: calculated` because the class list has no
+"on demand" option.)
 
-## Adding a private repository (UI)
+### Installing Private HACS itself
 
-1. **Settings → Devices & services → Private HACS → Configure**.
-2. Pick **"Add a private repository"**.
-3. Paste the repo URL (`https://github.com/owner/repo`) or `owner/repo`.
-4. Choose how to track it. The default is **branch** with `main` pre-filled,
-   which fits a personal "I push when it's ready, then click update" workflow.
-   You can also pick latest **release**, a specific **tag**, or a pinned
-   **commit** SHA.
-5. Leave **"Install immediately after adding"** checked. The form will both
-   register the repo and copy its `custom_components/<name>/` folder into
-   place.
-6. **Restart Home Assistant** to load the new integration. HA does not
-   hot-reload custom integration code — this constraint applies to HACS too.
+It cannot update itself (its own name is reserved), so it comes from outside:
 
-## Managing tracked repositories (UI)
+- **Marketplace, "Add from a GitHub link"** (Settings → Marketplace): needs a **public** GitHub
+  repository, so publish this fork publicly (it contains no secrets). That path verifies
+  nothing: you trust GitHub and your account. Repository requirements, all present here:
+  `hacs.json` and `README.md` in the root; `custom_components/private_hacs/` with a
+  `manifest.json` (`domain`, `name`, `version`, `documentation`, `issue_tracker`, `codeowners`),
+  `translations/en.json` and `brand/icon.png`. For a versioned install publish a **GitHub
+  Release** whose tag equals the manifest version (`0.2.0`; whether a leading `v` is accepted is
+  not documented, so use the bare version). Without a release it installs the latest commit of
+  the default branch.
+- **Manually**: copy `custom_components/private_hacs/` into your Home Assistant
+  `custom_components/` and restart.
 
-**Settings → Devices & services → Private HACS → Configure → "Manage…"**
-lets you pick a tracked repo and:
+## Limits and what is persisted
 
-- **Install / update** — re-download the configured ref and overwrite the
-  installed files. This is also how you pick up a new release: push to the
-  upstream repo, then click here. Restart Home Assistant afterwards to load
-  the new code.
-- **Remove** — delete the integration from `custom_components/` and stop
-  tracking it.
+- **Whoever holds your signing key and passphrase can ship code.** Keep it like a production key.
+- **Removing a key** stops accepting new signatures from the next action on (an action already
+  running finishes with the old keys) and blocks rollback to code it signed. It does not
+  uninstall or re-verify what is already installed.
+- **Rollback** keeps one previous version, restores it without re-downloading, and refuses if
+  its recorded signature is missing or from a key no longer trusted.
+- **Python `requirements`** declared by an installed integration are installed by Home Assistant
+  at startup, outside this signature check. The notification after an install lists them.
+- A signature proves who released the code, not that it is correct: read the diff before signing.
+- The extension whitelist rejects common files: `.js .html .css .svg .jpg .mo .so`, files with no
+  extension (e.g. `LICENSE`) and hidden files inside the integration folder. A release that
+  ships one cannot be installed.
+- Installed integrations run inside Home Assistant without a sandbox, like any custom integration.
 
-There is no background polling. Private HACS only contacts GitHub when you
-explicitly add, install, or update a repo.
+What is stored: the trusted **public** keys in the config entry; in
+`.storage/private_hacs.signed_repositories`, per repository: name, integration folder, installed
+version, commit and key fingerprint; in each installed folder `.private_hacs.json` (commit,
+fingerprint, version); and one previous version per integration in
+`custom_components/.private_hacs_backups/`.
 
-## Service API (optional)
+## Differences from upstream
 
-Everything the UI does is also exposed as services if you want to drive it
-from automations:
+| | upstream | this fork |
+|---|---|---|
+| What is installed | branch / tag / release / commit, unverified | only annotated `vX.Y.Z` tags with a valid trusted signature |
+| Services (`add_repository`, `install`, …) | yes | removed (any automation could have installed code) |
+| GitHub token | kept in `.storage` (plain JSON); classic `repo` or fine-grained | **never stored**, typed per action; fine-grained read-only |
+| Tarball | links skipped, no limits, no file filter | strict validation, limits, extension whitelist, commit bound by the full id, decompression cap |
+| Install | delete, then extract | stage, validate, flush, two renames, backup, rollback, crash recovery |
+| Redirects | followed with the token | followed by hand, never with the token, only to `codeload.github.com` |
+| Downgrades / moved tags | silent | refused unless explicit |
+| Existing folder of the same name | overwritten | refused |
 
-```yaml
-service: private_hacs.add_repository
-data:
-  full_name: https://github.com/pestevez/my-private-integration
-  ref_type: release      # release | tag | branch | commit
-  # ref: v1.2.0          # required for tag/branch/commit
-  # integration_name: my_integration   # only if the repo has multiple integrations
+(The upstream column describes the original code as read for this fork.)
+
+## Development
+
+```
+python -m pytest        # needs pytest-homeassistant-custom-component, git and ssh-keygen
+ruff check .
 ```
 
-Other services: `private_hacs.install`, `private_hacs.update`,
-`private_hacs.remove_repository`.
+245 tests. They create real git repositories with real SSH-signed tags, so the verifier is
+checked against what `git` and `ssh-keygen` produce; the tarballs come from `git archive` or
+carry a GitHub-style header. The GitHub client is tested against scripted responses only. The unit
+tests run on Home Assistant 2026.10.4 (the newest the test plugin supports).
 
-## Repository layout requirements
+## Verified
 
-The repo must contain a `custom_components/<integration_name>/` directory at
-its root, the same convention HACS uses. Private HACS extracts only that
-folder, ignoring everything else in the repo.
+Verified: the unit tests above; the whole flow in a real Home Assistant **2026.10.4 and
+2026.11.2** (config and options flows driven over REST, token absent from every file) against a
+local fake GitHub that serves real signed tags; the GitHub client against GitHub's public API
+(tag objects, `verification.payload`/`signature`, redirect to `codeload.github.com`, and that
+the tarball header carries the full commit id); the dependency audit (see below).
 
-If a repo contains more than one integration, set `integration_name` when
-calling `add_repository` to pick which one to install.
-
-## Why not just use HACS?
-
-HACS is great. Use it if your integrations are public or you are happy
-configuring HACS's "custom repositories" feature — that flow does support
-private repos with a token. Private HACS exists because:
-
-- I wanted a tool that is private-first instead of private-as-a-side-feature.
-- I wanted no UI dependency on the HACS panel, just plain HA services.
-- It is small enough to read end-to-end (~600 lines) and audit before running.
+Dependencies: the code imports `aiohttp`, `yarl`, `cryptography` and `probatio`
+(`voluptuous` as a fallback), all provided by Home Assistant (`manifest.json` has no
+`requirements`). `pip-audit` on the 221 packages of the test environment (HA 2026.10.4) reports
+nothing for those; its only findings are Pillow 12.3.0 (pinned by that Home Assistant version,
+fixed in 13.0.0, which Home Assistant 2026.11.2 ships) and the disputed jsonpickle 1.4.1
+(test environment only). This integration uses neither.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Original work © 2026 Pablo Estevez; changes © 2026 Dario Dorfelli.

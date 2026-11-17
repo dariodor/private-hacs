@@ -1,6 +1,4 @@
 {
-  "name": "Private HACS",
-  "homeassistant": "2024.1.0",
-  "render_readme": true,
-  "content_in_root": false
+  "name": "Private HACS (signed)",
+  "homeassistant": "2026.10.0"
 }

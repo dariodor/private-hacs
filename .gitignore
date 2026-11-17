@@ -35,3 +35,6 @@ secrets.yaml
 
 # Claude Code session state
 .claude/
+
+# local, not for publication
+private/
